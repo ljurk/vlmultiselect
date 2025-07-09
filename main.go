@@ -3,15 +3,15 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
+
+	"github.com/qjebbs/go-jsons"
 )
 
 var url string
@@ -63,13 +63,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
+	logHandler := func(w http.ResponseWriter, r *http.Request) {
+		log.Println("LOG")
+		logRequest(r)
+	}
 
-	fmt.Println(tenants)
-	fmt.Println(url)
 	http.HandleFunc("/select/logsql/query", makeNDJSONHandler("/select/logsql/query"))
-	http.HandleFunc("/select/logsql/hits", makeNDJSONHandler("/select/logsql/hits"))
+	http.HandleFunc("/select/logsql/hits", makeJSONValuesHandler("/select/logsql/hits"))
 	http.HandleFunc("/select/logsql/field_names", makeJSONValuesHandler("/select/logsql/field_names"))
 	http.HandleFunc("/select/logsql/field_values", makeJSONValuesHandler("/select/logsql/field_values"))
+	http.HandleFunc("/select/logsql/tail", logHandler)
+	http.HandleFunc("/select/logsql/facets", logHandler)
+	http.HandleFunc("/select/logsql/stats_query", logHandler)
+	http.HandleFunc("/select/logsql/stats_query_range", logHandler)
+	http.HandleFunc("/select/logsql/stream_ids", logHandler)
+	http.HandleFunc("/select/logsql/streams", logHandler)
+	http.HandleFunc("/select/logsql/stream_field_names", logHandler)
+	http.HandleFunc("/select/logsql/stream_field_values", logHandler)
 
 	log.Println("Listening on :8000")
 	log.Fatal(http.ListenAndServe(":8000", nil))
@@ -106,6 +116,7 @@ func makeJSONValuesHandler(path string) http.HandlerFunc {
 }
 
 func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
+	query := r.URL.RawQuery
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
@@ -116,25 +127,25 @@ func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
 		}
 	}()
 
-	type value struct {
-		Value string `json:"value"`
-		Hits  int    `json:"hits"`
-	}
-
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		merged = make(map[string]int)
-		errs   = make([]error, len(tenants))
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs = make([]error, len(tenants))
 	)
 
+	merged := []byte(`{}`)
 	for i, t := range tenants {
 		wg.Add(1)
 		go func(i int, t struct {
 			AccountID, ProjectID string
 		}) {
 			defer wg.Done()
-			req, err := http.NewRequest("POST", url+path, bytes.NewReader(body))
+			// req, err := http.NewRequest("POST", url+path, bytes.NewReader(body))
+			tempurl := url + path
+			if query != "" {
+				tempurl += "?" + query
+			}
+			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(body))
 			if err != nil {
 				errs[i] = err
 				return
@@ -148,25 +159,17 @@ func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
 				errs[i] = err
 				return
 			}
-			defer func() {
-				if err := resp.Body.Close(); err != nil {
-					log.Printf("warning: failed to close response body: %v", err)
-				}
-			}()
-
-			var result struct {
-				Values []value `json:"values"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				errs[i] = err
-				return
-			}
-
+			origBody, _ := io.ReadAll(resp.Body)
+			log.Printf("original Body: %s", origBody)
 			mu.Lock()
-			for _, v := range result.Values {
-				merged[v.Value] += v.Hits
-			}
+			merged, _ = jsons.Merge(merged, origBody)
 			mu.Unlock()
+			fmt.Printf("MERGED: %s\n", string(merged))
+
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("warning: failed to close response body: %v", err)
+			}
+
 		}(i, t)
 	}
 	wg.Wait()
@@ -176,16 +179,7 @@ func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
 			return nil, e
 		}
 	}
-
-	var final []value
-	for val, hits := range merged {
-		final = append(final, value{val, hits})
-	}
-	sort.Slice(final, func(i, j int) bool {
-		return final[i].Value < final[j].Value
-	})
-
-	return json.Marshal(map[string]any{"values": final})
+	return merged, nil
 }
 
 func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
@@ -196,7 +190,7 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read original request body: %w", err)
 	}
-	fmt.Printf("original Body: %s", origBody)
+	log.Printf("original Body: %s", origBody)
 	if err := r.Body.Close(); err != nil {
 		log.Printf("warning: failed to close request body: %v", err)
 	}
@@ -217,7 +211,6 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 			if query != "" {
 				tempurl += "?" + query
 			}
-			fmt.Println(tempurl)
 			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(origBody))
 			if err != nil {
 				errs[i] = err

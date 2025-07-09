@@ -68,10 +68,10 @@ func main() {
 		logRequest(r)
 	}
 
-	http.HandleFunc("/select/logsql/query", makeNDJSONHandler("/select/logsql/query"))
-	http.HandleFunc("/select/logsql/hits", makeJSONValuesHandler("/select/logsql/hits"))
-	http.HandleFunc("/select/logsql/field_names", makeJSONValuesHandler("/select/logsql/field_names"))
-	http.HandleFunc("/select/logsql/field_values", makeJSONValuesHandler("/select/logsql/field_values"))
+	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson"))
+	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json"))
+	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json"))
+	http.HandleFunc("/select/logsql/field_values", makeJSONHandler("/select/logsql/field_values", "json"))
 	http.HandleFunc("/select/logsql/tail", logHandler)
 	http.HandleFunc("/select/logsql/facets", logHandler)
 	http.HandleFunc("/select/logsql/stats_query", logHandler)
@@ -85,10 +85,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }
 
-func makeNDJSONHandler(path string) http.HandlerFunc {
+func makeJSONHandler(path string, mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logRequest(r)
-		merged, err := forwardAndMergeNDJSON(r, path)
+		merged, err := forwardAndMerge(r, path, mode)
 		if err != nil {
 			http.Error(w, "Error fetching NDJSON: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -100,106 +100,26 @@ func makeNDJSONHandler(path string) http.HandlerFunc {
 	}
 }
 
-func makeJSONValuesHandler(path string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		logRequest(r)
-		merged, err := forwardAndMergeJSONArrays(r, path)
-		if err != nil {
-			http.Error(w, "Error fetching JSON: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if _, err := w.Write(merged); err != nil {
-			log.Printf("failed to write response: %v", err)
-		}
-	}
-}
-
-func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
+func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) {
 	query := r.URL.RawQuery
-	body, err := io.ReadAll(r.Body)
+	origBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			log.Printf("warning: failed to close request body: %v", err)
-		}
-	}()
-
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs = make([]error, len(tenants))
-	)
-
-	merged := []byte(`{}`)
-	for i, t := range tenants {
-		wg.Add(1)
-		go func(i int, t struct {
-			AccountID, ProjectID string
-		}) {
-			defer wg.Done()
-			// req, err := http.NewRequest("POST", url+path, bytes.NewReader(body))
-			tempurl := url + path
-			if query != "" {
-				tempurl += "?" + query
-			}
-			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(body))
-			if err != nil {
-				errs[i] = err
-				return
-			}
-			req.Header.Set("AccountID", t.AccountID)
-			req.Header.Set("ProjectID", t.ProjectID)
-			req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				errs[i] = err
-				return
-			}
-			origBody, _ := io.ReadAll(resp.Body)
-			log.Printf("original Body: %s", origBody)
-			mu.Lock()
-			merged, _ = jsons.Merge(merged, origBody)
-			mu.Unlock()
-			fmt.Printf("MERGED: %s\n", string(merged))
-
-			if err := resp.Body.Close(); err != nil {
-				log.Printf("warning: failed to close response body: %v", err)
-			}
-
-		}(i, t)
-	}
-	wg.Wait()
-
-	for _, e := range errs {
-		if e != nil {
-			return nil, e
-		}
-	}
-	return merged, nil
-}
-
-func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
-	query := r.URL.RawQuery
-	logPrefix := strings.TrimPrefix(path, "/select/logsql/")
-
-	origBody, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read original request body: %w", err)
-	}
-	log.Printf("original Body: %s", origBody)
 	if err := r.Body.Close(); err != nil {
 		log.Printf("warning: failed to close request body: %v", err)
 	}
+	log.Printf("original Body: %s", origBody)
 
 	var (
-		wg   sync.WaitGroup
-		bufs = make([][]byte, len(tenants))
-		errs = make([]error, len(tenants))
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		errs    = make([]error, len(tenants))
+		results = make([][]byte, len(tenants))
 	)
+
+	logPrefix := ""
+	logPrefix = strings.TrimPrefix(path, "/select/logsql/")
 
 	for i, t := range tenants {
 		wg.Add(1)
@@ -207,10 +127,12 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 			AccountID, ProjectID string
 		}) {
 			defer wg.Done()
+
 			tempurl := url + path
 			if query != "" {
 				tempurl += "?" + query
 			}
+
 			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(origBody))
 			if err != nil {
 				errs[i] = err
@@ -233,15 +155,20 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 				}
 			}()
 
-			if resp.StatusCode != http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+
+			if mode == "ndjson" && resp.StatusCode != http.StatusOK {
 				errs[i] = fmt.Errorf("[%s] status %d", logPrefix, resp.StatusCode)
 				return
 			}
 
-			bufs[i], err = io.ReadAll(resp.Body)
-			if err != nil {
-				errs[i] = err
-			}
+			mu.Lock()
+			results[i] = body
+			mu.Unlock()
 		}(i, t)
 	}
 	wg.Wait()
@@ -252,16 +179,33 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 		}
 	}
 
-	var merged bytes.Buffer
-	for _, b := range bufs {
-		scanner := bufio.NewScanner(bytes.NewReader(b))
-		for scanner.Scan() {
-			merged.WriteString(scanner.Text())
-			merged.WriteByte('\n')
+	switch mode {
+	case "json":
+		merged := []byte(`{}`)
+		for _, b := range results {
+			var err error
+			merged, err = jsons.Merge(merged, b)
+			if err != nil {
+				return nil, fmt.Errorf("json merge failed: %w", err)
+			}
 		}
+		return merged, nil
+
+	case "ndjson":
+		var merged bytes.Buffer
+		for _, b := range results {
+			scanner := bufio.NewScanner(bytes.NewReader(b))
+			for scanner.Scan() {
+				merged.Write(scanner.Bytes())
+				merged.WriteByte('\n')
+			}
+		}
+		log.Printf("[%s] Merged NDJSON size: %d bytes", logPrefix, merged.Len())
+		return merged.Bytes(), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported mode: %s", mode)
 	}
-	log.Printf("[%s] Merged NDJSON size: %d bytes", logPrefix, merged.Len())
-	return merged.Bytes(), nil
 }
 
 func logRequest(r *http.Request) {

@@ -1,0 +1,49 @@
+---
+name: Build and Push Docker image
+
+on:
+  push:
+    branches:
+      - "**" # Run on all branches
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get branch name
+        id: branch
+        run: |
+          ref=${GITHUB_REF##*/}
+          echo "BRANCH_NAME=${ref}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}:${{ steps.branch.outputs.BRANCH_NAME }} .
+
+      - name: Tag as latest if main
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          docker tag ghcr.io/${{ github.repository }}:${{ steps.branch.outputs.BRANCH_NAME }} ghcr.io/${{ github.repository }}:latest
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/${{ github.repository }}:${{ steps.branch.outputs.BRANCH_NAME }}
+
+      - name: Push latest tag if main
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          docker push ghcr.io/${{ github.repository }}:latest

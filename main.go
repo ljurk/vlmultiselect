@@ -17,7 +17,7 @@ import (
 var url string
 
 type Tenant struct {
-	TenantID  string
+	AccountID string
 	ProjectID string
 }
 
@@ -36,7 +36,7 @@ func parseTenantsFromFlags(ids string) ([]Tenant, error) {
 		}
 
 		tenants = append(tenants, Tenant{
-			TenantID:  strings.Split(strings.TrimSpace(id), ":")[0],
+			AccountID: strings.Split(strings.TrimSpace(id), ":")[0],
 			ProjectID: strings.Split(strings.TrimSpace(id), ":")[1],
 		})
 	}
@@ -131,7 +131,7 @@ func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
 	for i, t := range tenants {
 		wg.Add(1)
 		go func(i int, t struct {
-			TenantID, ProjectID string
+			AccountID, ProjectID string
 		}) {
 			defer wg.Done()
 			req, err := http.NewRequest("POST", url+path, bytes.NewReader(body))
@@ -139,7 +139,7 @@ func forwardAndMergeJSONArrays(r *http.Request, path string) ([]byte, error) {
 				errs[i] = err
 				return
 			}
-			req.Header.Set("AccountID", t.TenantID)
+			req.Header.Set("AccountID", t.AccountID)
 			req.Header.Set("ProjectID", t.ProjectID)
 			req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 
@@ -192,6 +192,15 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 	query := r.URL.RawQuery
 	logPrefix := strings.TrimPrefix(path, "/select/logsql/")
 
+	origBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read original request body: %w", err)
+	}
+	fmt.Printf("original Body: %s", origBody)
+	if err := r.Body.Close(); err != nil {
+		log.Printf("warning: failed to close request body: %v", err)
+	}
+
 	var (
 		wg   sync.WaitGroup
 		bufs = make([][]byte, len(tenants))
@@ -201,16 +210,21 @@ func forwardAndMergeNDJSON(r *http.Request, path string) ([]byte, error) {
 	for i, t := range tenants {
 		wg.Add(1)
 		go func(i int, t struct {
-			TenantID, ProjectID string
+			AccountID, ProjectID string
 		}) {
 			defer wg.Done()
-			req, err := http.NewRequest("POST", fmt.Sprintf("%s%s?%s", url, path, query), nil)
+			tempurl := url + path
+			if query != "" {
+				tempurl += "?" + query
+			}
+			fmt.Println(tempurl)
+			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(origBody))
 			if err != nil {
 				errs[i] = err
 				return
 			}
-			req.Header.Set("AccountID", t.TenantID)
-			req.Header.Set("ProjectID", t.TenantID)
+			req.Header.Set("AccountID", t.AccountID)
+			req.Header.Set("ProjectID", t.ProjectID)
 			if ct := r.Header.Get("Content-Type"); ct != "" {
 				req.Header.Set("Content-Type", ct)
 			}

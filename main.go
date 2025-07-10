@@ -36,6 +36,10 @@ func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 				return nil, fmt.Errorf("wrong tenant format, use <tenantID>:<projectID>")
 			}
 
+			if !strings.HasPrefix(storageNode, "http://") {
+				storageNode = "http://" + storageNode
+			}
+
 			endpoints = append(endpoints, Endpoint{
 				AccountID: strings.Split(strings.TrimSpace(id), ":")[0],
 				ProjectID: strings.Split(strings.TrimSpace(id), ":")[1],

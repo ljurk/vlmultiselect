@@ -69,6 +69,13 @@ func main() {
 		log.Fatalf("Error: %v", err)
 	}
 
+	health := func(w http.ResponseWriter, _ *http.Request) {
+		_, err = io.WriteString(w, "OK")
+		if err != nil {
+			log.Fatalf("Error: %v", err)
+		}
+	}
+	http.HandleFunc("/health", health)
 	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson"))
 	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json"))
 	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json"))

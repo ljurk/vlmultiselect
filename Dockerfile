@@ -8,4 +8,4 @@ RUN go build -o app .
 FROM alpine:latest
 WORKDIR /
 COPY --from=build /app /app
-ENTRYPOINT ["sh", "-c", "./app"]
+ENTRYPOINT ["/app"]

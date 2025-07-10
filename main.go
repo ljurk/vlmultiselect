@@ -14,72 +14,72 @@ import (
 	"github.com/qjebbs/go-jsons"
 )
 
-var url string
-
-type Tenant struct {
+type Endpoint struct {
 	AccountID string
 	ProjectID string
+	Url       string
 }
 
-var tenants []Tenant
+var endpoints []Endpoint
 
-func parseTenantsFromFlags(ids string) ([]Tenant, error) {
-	if ids == "" {
-		return nil, fmt.Errorf("missing required flag: -tenant-ids")
+func printEndpoints(endpoints []Endpoint) {
+	for _, i := range endpoints {
+		fmt.Printf("Url: %s; AccountID: %s; ProjectID: %s\n", i.Url, i.AccountID, i.ProjectID)
 	}
+}
 
-	idList := strings.Split(ids, ",")
-	var tenants []Tenant
-	for _, id := range idList {
-		if len(strings.Split(strings.TrimSpace(id), ":")) < 2 {
-			return nil, fmt.Errorf("wrong tenant format, use <tenantID>:<projectID>")
+func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
+	var endpoints []Endpoint
+	for storageNode := range strings.SplitSeq(nodes, ",") {
+		for id := range strings.SplitSeq(ids, ",") {
+			if len(strings.Split(strings.TrimSpace(id), ":")) < 2 {
+				return nil, fmt.Errorf("wrong tenant format, use <tenantID>:<projectID>")
+			}
+
+			endpoints = append(endpoints, Endpoint{
+				AccountID: strings.Split(strings.TrimSpace(id), ":")[0],
+				ProjectID: strings.Split(strings.TrimSpace(id), ":")[1],
+				Url:       storageNode,
+			})
 		}
-
-		tenants = append(tenants, Tenant{
-			AccountID: strings.Split(strings.TrimSpace(id), ":")[0],
-			ProjectID: strings.Split(strings.TrimSpace(id), ":")[1],
-		})
 	}
-	if len(tenants) == 0 {
-		return nil, fmt.Errorf("no valid tenant IDs found in -tenants")
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("no endpoints parsed")
 	}
-	return tenants, nil
+	return endpoints, nil
 }
 
 func main() {
 	var idsFlag string
-	flag.StringVar(&url, "url", "", "base URL [default: http://localhost:9428]")
+	var nodesFlag string
+	flag.StringVar(&nodesFlag, "storageNode", "", "Comma-seperated list of storageNodes")
 	flag.StringVar(&idsFlag, "tenants", "", "Comma-separated list of tenant IDs (e.g., 1,2,3)")
 	flag.Parse()
 
-	if url == "" {
-		log.Fatal("-url not set")
+	if nodesFlag == "" {
+		log.Fatal("-storageNode not set")
 	}
 	if idsFlag == "" {
 		log.Fatal("-tenants not set")
 	}
 	var err error
-	tenants, err = parseTenantsFromFlags(idsFlag)
+	endpoints, err = parseEndpointsFromFlags(idsFlag, nodesFlag)
+	printEndpoints(endpoints)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
-	}
-	logHandler := func(w http.ResponseWriter, r *http.Request) {
-		log.Println("LOG")
-		logRequest(r)
 	}
 
 	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson"))
 	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json"))
 	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json"))
 	http.HandleFunc("/select/logsql/field_values", makeJSONHandler("/select/logsql/field_values", "json"))
-	http.HandleFunc("/select/logsql/tail", logHandler)
-	http.HandleFunc("/select/logsql/facets", logHandler)
-	http.HandleFunc("/select/logsql/stats_query", logHandler)
-	http.HandleFunc("/select/logsql/stats_query_range", logHandler)
-	http.HandleFunc("/select/logsql/stream_ids", logHandler)
-	http.HandleFunc("/select/logsql/streams", logHandler)
-	http.HandleFunc("/select/logsql/stream_field_names", logHandler)
-	http.HandleFunc("/select/logsql/stream_field_values", logHandler)
+	http.HandleFunc("/select/logsql/facets", makeJSONHandler("/select/logsql/facets", "json"))
+	http.HandleFunc("/select/logsql/stats_query", makeJSONHandler("/select/logsql/stats_query", "json"))
+	http.HandleFunc("/select/logsql/stats_query_range", makeJSONHandler("/select/logsql/stats_query_range", "json"))
+	http.HandleFunc("/select/logsql/stream_ids", makeJSONHandler("/select/logsql/stream_ids", "json"))
+	http.HandleFunc("/select/logsql/streams", makeJSONHandler("/select/logsql/stream_ids", "json"))
+	http.HandleFunc("/select/logsql/stream_field_names", makeJSONHandler("/select/logsql/stream_field_names", "json"))
+	http.HandleFunc("/select/logsql/stream_field_values", makeJSONHandler("/select/logsql/stream_ids", "json"))
 
 	log.Println("Listening on :8000")
 	log.Fatal(http.ListenAndServe(":8000", nil))
@@ -114,21 +114,21 @@ func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) 
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
-		errs    = make([]error, len(tenants))
-		results = make([][]byte, len(tenants))
+		errs    = make([]error, len(endpoints))
+		results = make([][]byte, len(endpoints))
 	)
 
 	logPrefix := ""
 	logPrefix = strings.TrimPrefix(path, "/select/logsql/")
 
-	for i, t := range tenants {
+	for i, t := range endpoints {
 		wg.Add(1)
 		go func(i int, t struct {
-			AccountID, ProjectID string
+			AccountID, ProjectID, Url string
 		}) {
 			defer wg.Done()
 
-			tempurl := url + path
+			tempurl := t.Url + path
 			if query != "" {
 				tempurl += "?" + query
 			}

@@ -22,12 +22,6 @@ type Endpoint struct {
 
 var endpoints []Endpoint
 
-func printEndpoints(endpoints []Endpoint) {
-	for _, i := range endpoints {
-		fmt.Printf("Url: %s; AccountID: %s; ProjectID: %s\n", i.Url, i.AccountID, i.ProjectID)
-	}
-}
-
 func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 	var endpoints []Endpoint
 	for storageNode := range strings.SplitSeq(nodes, ",") {
@@ -54,6 +48,7 @@ func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 }
 
 func main() {
+	log.Println("Starting vlmultiselect")
 	var idsFlag string
 	var nodesFlag string
 	flag.StringVar(&nodesFlag, "storageNode", "", "Comma-seperated list of storageNodes")
@@ -68,9 +63,13 @@ func main() {
 	}
 	var err error
 	endpoints, err = parseEndpointsFromFlags(idsFlag, nodesFlag)
-	printEndpoints(endpoints)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
+	}
+
+	log.Println("configured endpoints:")
+	for _, i := range endpoints {
+		log.Printf("Url: %s; AccountID: %s; ProjectID: %s\n", i.Url, i.AccountID, i.ProjectID)
 	}
 
 	health := func(w http.ResponseWriter, _ *http.Request) {
@@ -113,14 +112,16 @@ func makeJSONHandler(path string, mode string) http.HandlerFunc {
 
 func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) {
 	query := r.URL.RawQuery
-	origBody, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if err := r.Body.Close(); err != nil {
 		log.Printf("warning: failed to close request body: %v", err)
 	}
-	log.Printf("original Body: %s", origBody)
+	if len(body) != 0 {
+		log.Printf("[REQ] body: %s", body)
+	}
 
 	var (
 		wg      sync.WaitGroup
@@ -144,7 +145,7 @@ func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) 
 				tempurl += "?" + query
 			}
 
-			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(origBody))
+			req, err := http.NewRequest("POST", tempurl, bytes.NewReader(body))
 			if err != nil {
 				errs[i] = err
 				return

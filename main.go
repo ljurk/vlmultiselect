@@ -17,7 +17,7 @@ import (
 type Endpoint struct {
 	AccountID string
 	ProjectID string
-	Url       string
+	URL       string
 }
 
 var endpoints []Endpoint
@@ -37,7 +37,7 @@ func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 			endpoints = append(endpoints, Endpoint{
 				AccountID: strings.Split(strings.TrimSpace(id), ":")[0],
 				ProjectID: strings.Split(strings.TrimSpace(id), ":")[1],
-				Url:       storageNode,
+				URL:       storageNode,
 			})
 		}
 	}
@@ -69,7 +69,7 @@ func main() {
 
 	log.Println("configured endpoints:")
 	for _, i := range endpoints {
-		log.Printf("Url: %s; AccountID: %s; ProjectID: %s\n", i.Url, i.AccountID, i.ProjectID)
+		log.Printf("URL: %s; AccountID: %s; ProjectID: %s\n", i.URL, i.AccountID, i.ProjectID)
 	}
 
 	health := func(w http.ResponseWriter, _ *http.Request) {
@@ -136,11 +136,11 @@ func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) 
 	for i, t := range endpoints {
 		wg.Add(1)
 		go func(i int, t struct {
-			AccountID, ProjectID, Url string
+			AccountID, ProjectID, URL string
 		}) {
 			defer wg.Done()
 
-			tempurl := t.Url + path
+			tempurl := t.URL + path
 			if query != "" {
 				tempurl += "?" + query
 			}

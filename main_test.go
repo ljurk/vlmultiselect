@@ -47,8 +47,8 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 	defer server.Close()
 
 	endpoints = []Endpoint{
-		{AccountID: "1", ProjectID: "p1", Url: server.URL},
-		{AccountID: "2", ProjectID: "p2", Url: server.URL},
+		{AccountID: "1", ProjectID: "p1", URL: server.URL},
+		{AccountID: "2", ProjectID: "p2", URL: server.URL},
 	}
 
 	req := httptest.NewRequest("POST", "/select/logsql/query?filter=ok", bytes.NewBuffer([]byte("test payload")))
@@ -68,7 +68,7 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 func TestMakeJSONHandler_NDJSON(t *testing.T) {
 	endpoints = []Endpoint{{
 		AccountID: "1", ProjectID: "p1",
-		Url: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		URL: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, err := io.WriteString(w, `{"k":"v"}`+"\n")
 			if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,41 @@ type Endpoint struct {
 }
 
 var endpoints []Endpoint
+
+func mergeAndSumJSON(a, b []byte) ([]byte, error) {
+	type Item struct {
+		Hits  int    `json:"hits"`
+		Value string `json:"value"`
+	}
+	type Payload struct {
+		Values []Item `json:"values"`
+	}
+
+	var pa, pb Payload
+	if err := json.Unmarshal(a, &pa); err != nil {
+		return nil, fmt.Errorf("unmarshal a: %w", err)
+	}
+	if err := json.Unmarshal(b, &pb); err != nil {
+		return nil, fmt.Errorf("unmarshal b: %w", err)
+	}
+
+	// Map by Value for easy sum
+	mergedMap := make(map[string]int)
+	for _, item := range pa.Values {
+		mergedMap[item.Value] += item.Hits
+	}
+	for _, item := range pb.Values {
+		mergedMap[item.Value] += item.Hits
+	}
+
+	// Build merged payload
+	merged := Payload{Values: make([]Item, 0, len(mergedMap))}
+	for value, hits := range mergedMap {
+		merged.Values = append(merged.Values, Item{Hits: hits, Value: value})
+	}
+
+	return json.Marshal(merged)
+}
 
 func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 	var endpoints []Endpoint
@@ -196,7 +232,11 @@ func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) 
 		merged := []byte(`{}`)
 		for _, b := range results {
 			var err error
-			merged, err = jsons.Merge(merged, b)
+			if path == "/select/logsql/field_names" || path == "/select/logsql/field_values" {
+				merged, err = mergeAndSumJSON(merged, b)
+			} else {
+				merged, err = jsons.Merge(merged, b)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("json merge failed: %w", err)
 			}

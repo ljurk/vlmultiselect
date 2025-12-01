@@ -2,12 +2,35 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
+
+// ensure deterministic order of values[]**
+func normalize(m any) {
+	obj, ok := m.(map[string]any)
+	if !ok {
+		return
+	}
+	rawArr, ok := obj["values"].([]any)
+	if !ok {
+		return
+	}
+
+	sort.Slice(rawArr, func(i, j int) bool {
+		mi := rawArr[i].(map[string]any)
+		mj := rawArr[j].(map[string]any)
+		// Stable deterministic order by "value"
+		return mi["value"].(string) < mj["value"].(string)
+	})
+}
 
 // Test parsing tenant and storageNode flags
 func TestParseEndpointsFromFlags(t *testing.T) {
@@ -31,6 +54,90 @@ func TestParseEndpointsFromFlags(t *testing.T) {
 		}
 		if len(got) != tt.wantLen {
 			t.Errorf("expected %d endpoints, got %d", tt.wantLen, len(got))
+		}
+	}
+}
+
+func TestForwardAndMerge_json(t *testing.T) {
+	tests := []struct {
+		path    string
+		output1 string
+		output2 string
+		wantErr bool
+		want    string
+	}{
+		// one value, one to sum
+		{"/select/logsql/field_names",
+			`{"values":[{"hits":23,"value":"A"}]}`,
+			`{"values":[{"hits":23,"value":"A"}]}`,
+			false,
+			`{"values":[{"hits":46,"value":"A"}]}`},
+		// two values, one to sum
+		{"/select/logsql/field_names",
+			`{"values":[{"hits":23,"value":"A"}]}`,
+			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
+			false,
+			`{"values":[{"hits":46,"value":"A"},{"hits":161,"value":"B"}]}`},
+		// two values, two to sum
+		{"/select/logsql/field_names",
+			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
+			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
+			false,
+			`{"values":[{"hits":46,"value":"A"},{"hits":322,"value":"B"}]}`},
+		// other stucture
+		{"/foo/bar",
+			`{"foo": 2}`,
+			`{"bar": 3}`,
+			false,
+			`{"foo": 2, "bar": 3}`},
+	}
+
+	for _, tt := range tests {
+		server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, err := io.WriteString(w, tt.output1)
+			if err != nil {
+				t.Fatalf("failed responding: %v", err)
+			}
+		}))
+		defer server1.Close()
+
+		server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, err := io.WriteString(w, tt.output2)
+			if err != nil {
+				t.Fatalf("failed responding: %v", err)
+			}
+		}))
+		defer server2.Close()
+
+		endpoints = []Endpoint{
+			{AccountID: "1", ProjectID: "p1", URL: server1.URL},
+			{AccountID: "2", ProjectID: "p2", URL: server2.URL},
+		}
+
+		req := httptest.NewRequest("POST", fmt.Sprintf("%s?filter=ok", tt.path), bytes.NewBuffer([]byte("test payload")))
+		req.Header.Set("Content-Type", "application/json")
+
+		got, err := forwardAndMerge(req, tt.path, "json")
+		if err != nil {
+			t.Fatalf("forwardAndMerge failed: %v", err)
+		}
+
+		var gotMap, wantMap any
+
+		if err := json.Unmarshal(got, &gotMap); err != nil {
+			t.Fatalf("json.Unmarshal(got) failed: %v\nraw: %s", err, got)
+		}
+		if err := json.Unmarshal([]byte(tt.want), &wantMap); err != nil {
+			t.Fatalf("json.Unmarshal(want) failed: %v\nraw: %s", err, tt.want)
+		}
+
+		normalize(gotMap)
+		normalize(wantMap)
+
+		if !reflect.DeepEqual(gotMap, wantMap) {
+			t.Errorf("merged JSON mismatch:\n  got:  %v\n  want: %v", gotMap, wantMap)
 		}
 	}
 }

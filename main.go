@@ -140,7 +140,7 @@ func makeJSONHandler(path string, mode string, mergeStrategy MergeStrategy) http
 		logRequest(r)
 		merged, err := forwardAndMerge(r, path, mode, mergeStrategy)
 		if err != nil {
-			http.Error(w, "Error fetching NDJSON: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -151,10 +151,11 @@ func makeJSONHandler(path string, mode string, mergeStrategy MergeStrategy) http
 }
 
 func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy MergeStrategy) ([]byte, error) {
+	// check if request contains a body
 	query := r.URL.RawQuery
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return nil, fmt.Errorf("error: failed to read request body: %w", err)
 	}
 	if err := r.Body.Close(); err != nil {
 		log.Printf("warning: failed to close request body: %v", err)
@@ -173,14 +174,12 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 	logPrefix := ""
 	logPrefix = strings.TrimPrefix(path, "/select/logsql/")
 
-	for i, t := range endpoints {
+	for i, endpoint := range endpoints {
 		wg.Add(1)
-		go func(i int, t struct {
-			AccountID, ProjectID, URL string
-		}) {
+		go func(i int, ep Endpoint) {
 			defer wg.Done()
 
-			tempurl := t.URL + path
+			tempurl := ep.URL + path
 			if query != "" {
 				tempurl += "?" + query
 			}
@@ -190,8 +189,8 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 				errs[i] = err
 				return
 			}
-			req.Header.Set("AccountID", t.AccountID)
-			req.Header.Set("ProjectID", t.ProjectID)
+			req.Header.Set("AccountID", ep.AccountID)
+			req.Header.Set("ProjectID", ep.ProjectID)
 			if ct := r.Header.Get("Content-Type"); ct != "" {
 				req.Header.Set("Content-Type", ct)
 			}
@@ -221,7 +220,7 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 			mu.Lock()
 			results[i] = body
 			mu.Unlock()
-		}(i, t)
+		}(i, endpoint)
 	}
 	wg.Wait()
 

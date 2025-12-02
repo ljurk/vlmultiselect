@@ -15,6 +15,13 @@ import (
 	"github.com/qjebbs/go-jsons"
 )
 
+type MergeStrategy int
+
+const (
+	Merge MergeStrategy = iota
+	Sum
+)
+
 type Endpoint struct {
 	AccountID string
 	ProjectID string
@@ -115,26 +122,26 @@ func main() {
 		}
 	}
 	http.HandleFunc("/health", health)
-	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson"))
-	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json"))
-	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json"))
-	http.HandleFunc("/select/logsql/field_values", makeJSONHandler("/select/logsql/field_values", "json"))
-	http.HandleFunc("/select/logsql/facets", makeJSONHandler("/select/logsql/facets", "json"))
-	http.HandleFunc("/select/logsql/stats_query", makeJSONHandler("/select/logsql/stats_query", "json"))
-	http.HandleFunc("/select/logsql/stats_query_range", makeJSONHandler("/select/logsql/stats_query_range", "json"))
-	http.HandleFunc("/select/logsql/stream_ids", makeJSONHandler("/select/logsql/stream_ids", "json"))
-	http.HandleFunc("/select/logsql/streams", makeJSONHandler("/select/logsql/stream_ids", "json"))
-	http.HandleFunc("/select/logsql/stream_field_names", makeJSONHandler("/select/logsql/stream_field_names", "json"))
-	http.HandleFunc("/select/logsql/stream_field_values", makeJSONHandler("/select/logsql/stream_ids", "json"))
+	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson", Merge))
+	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json", Merge))
+	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json", Sum))
+	http.HandleFunc("/select/logsql/field_values", makeJSONHandler("/select/logsql/field_values", "json", Sum))
+	http.HandleFunc("/select/logsql/facets", makeJSONHandler("/select/logsql/facets", "json", Merge))
+	http.HandleFunc("/select/logsql/stats_query", makeJSONHandler("/select/logsql/stats_query", "json", Merge))
+	http.HandleFunc("/select/logsql/stats_query_range", makeJSONHandler("/select/logsql/stats_query_range", "json", Merge))
+	http.HandleFunc("/select/logsql/stream_ids", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
+	http.HandleFunc("/select/logsql/streams", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
+	http.HandleFunc("/select/logsql/stream_field_names", makeJSONHandler("/select/logsql/stream_field_names", "json", Merge))
+	http.HandleFunc("/select/logsql/stream_field_values", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
 
 	log.Println("Listening on :8000")
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }
 
-func makeJSONHandler(path string, mode string) http.HandlerFunc {
+func makeJSONHandler(path string, mode string, mergeStrategy MergeStrategy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logRequest(r)
-		merged, err := forwardAndMerge(r, path, mode)
+		merged, err := forwardAndMerge(r, path, mode, mergeStrategy)
 		if err != nil {
 			http.Error(w, "Error fetching NDJSON: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -146,7 +153,7 @@ func makeJSONHandler(path string, mode string) http.HandlerFunc {
 	}
 }
 
-func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) {
+func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy MergeStrategy) ([]byte, error) {
 	query := r.URL.RawQuery
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -232,11 +239,15 @@ func forwardAndMerge(r *http.Request, path string, mode string) ([]byte, error) 
 		merged := []byte(`{}`)
 		for _, b := range results {
 			var err error
-			if path == "/select/logsql/field_names" || path == "/select/logsql/field_values" {
-				merged, err = mergeAndSumJSON(merged, b)
-			} else {
+			switch mergeStrategy {
+			case Merge:
 				merged, err = jsons.Merge(merged, b)
+			case Sum:
+				merged, err = mergeAndSumJSON(merged, b)
+			default:
+				log.Fatalf("unknown MergeStrategy: %d", mergeStrategy)
 			}
+
 			if err != nil {
 				return nil, fmt.Errorf("json merge failed: %w", err)
 			}

@@ -65,31 +65,36 @@ func TestForwardAndMerge_json(t *testing.T) {
 		output2 string
 		wantErr bool
 		want    string
+		strat   MergeStrategy
 	}{
 		// one value, one to sum
 		{"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			false,
-			`{"values":[{"hits":46,"value":"A"}]}`},
+			`{"values":[{"hits":46,"value":"A"}]}`,
+			Sum},
 		// two values, one to sum
 		{"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			false,
-			`{"values":[{"hits":46,"value":"A"},{"hits":161,"value":"B"}]}`},
+			`{"values":[{"hits":46,"value":"A"},{"hits":161,"value":"B"}]}`,
+			Sum},
 		// two values, two to sum
 		{"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			false,
-			`{"values":[{"hits":46,"value":"A"},{"hits":322,"value":"B"}]}`},
+			`{"values":[{"hits":46,"value":"A"},{"hits":322,"value":"B"}]}`,
+			Sum},
 		// other stucture
 		{"/foo/bar",
 			`{"foo": 2}`,
 			`{"bar": 3}`,
 			false,
-			`{"foo": 2, "bar": 3}`},
+			`{"foo": 2, "bar": 3}`,
+			Merge},
 	}
 
 	for _, tt := range tests {
@@ -119,7 +124,7 @@ func TestForwardAndMerge_json(t *testing.T) {
 		req := httptest.NewRequest("POST", fmt.Sprintf("%s?filter=ok", tt.path), bytes.NewBuffer([]byte("test payload")))
 		req.Header.Set("Content-Type", "application/json")
 
-		got, err := forwardAndMerge(req, tt.path, "json")
+		got, err := forwardAndMerge(req, tt.path, "json", tt.strat)
 		if err != nil {
 			t.Fatalf("forwardAndMerge failed: %v", err)
 		}
@@ -161,7 +166,7 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 	req := httptest.NewRequest("POST", "/select/logsql/query?filter=ok", bytes.NewBuffer([]byte("test payload")))
 	req.Header.Set("Content-Type", "application/json")
 
-	got, err := forwardAndMerge(req, "/select/logsql/query", "ndjson")
+	got, err := forwardAndMerge(req, "/select/logsql/query", "ndjson", Merge)
 	if err != nil {
 		t.Fatalf("forwardAndMerge failed: %v", err)
 	}
@@ -188,7 +193,7 @@ func TestMakeJSONHandler_NDJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	rr := httptest.NewRecorder()
-	handler := makeJSONHandler("/select/logsql/query", "ndjson")
+	handler := makeJSONHandler("/select/logsql/query", "ndjson", Merge)
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {

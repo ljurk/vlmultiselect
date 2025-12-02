@@ -116,7 +116,7 @@ func TestForwardAndMerge_json(t *testing.T) {
 		}))
 		defer server2.Close()
 
-		endpoints = []Endpoint{
+		endpoints := []Endpoint{
 			{AccountID: "1", ProjectID: "p1", URL: server1.URL},
 			{AccountID: "2", ProjectID: "p2", URL: server2.URL},
 		}
@@ -124,9 +124,15 @@ func TestForwardAndMerge_json(t *testing.T) {
 		req := httptest.NewRequest("POST", fmt.Sprintf("%s?filter=ok", tt.path), bytes.NewBuffer([]byte("test payload")))
 		req.Header.Set("Content-Type", "application/json")
 
-		got, err := forwardAndMerge(req, tt.path, "json", tt.strat)
+		data, err := getEndpointData(req, tt.path, endpoints)
 		if err != nil {
-			t.Fatalf("forwardAndMerge failed: %v", err)
+			t.Fatalf("getEndpointData() failed: %s", err)
+			return
+		}
+		got, err := mergeData(data, JSON, tt.strat)
+		if err != nil {
+			t.Fatalf("mergeData() failed: %s", err)
+			return
 		}
 
 		var gotMap, wantMap any
@@ -158,7 +164,7 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 	}))
 	defer server.Close()
 
-	endpoints = []Endpoint{
+	endpoints := []Endpoint{
 		{AccountID: "1", ProjectID: "p1", URL: server.URL},
 		{AccountID: "2", ProjectID: "p2", URL: server.URL},
 	}
@@ -166,9 +172,15 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 	req := httptest.NewRequest("POST", "/select/logsql/query?filter=ok", bytes.NewBuffer([]byte("test payload")))
 	req.Header.Set("Content-Type", "application/json")
 
-	got, err := forwardAndMerge(req, "/select/logsql/query", "ndjson", Merge)
+	data, err := getEndpointData(req, "/select/logsql/query", endpoints)
 	if err != nil {
-		t.Fatalf("forwardAndMerge failed: %v", err)
+		t.Fatalf("getEndpointData() failed: %s", err)
+		return
+	}
+	got, err := mergeData(data, NDJSON, Merge)
+	if err != nil {
+		t.Fatalf("mergeData() failed: %s", err)
+		return
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
@@ -178,7 +190,7 @@ func TestForwardAndMerge_ndjson(t *testing.T) {
 }
 
 func TestMakeJSONHandler_NDJSON(t *testing.T) {
-	endpoints = []Endpoint{{
+	endpoints := []Endpoint{{
 		AccountID: "1", ProjectID: "p1",
 		URL: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -193,7 +205,7 @@ func TestMakeJSONHandler_NDJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	rr := httptest.NewRecorder()
-	handler := makeJSONHandler("/select/logsql/query", "ndjson", Merge)
+	handler := makeJSONHandler("/select/logsql/query", NDJSON, Merge, endpoints)
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {

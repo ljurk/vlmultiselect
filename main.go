@@ -22,13 +22,38 @@ const (
 	Sum
 )
 
+type Format int
+
+const (
+	JSON Format = iota
+	NDJSON
+)
+
 type Endpoint struct {
 	AccountID string
 	ProjectID string
 	URL       string
 }
 
-var endpoints []Endpoint
+type Route struct {
+	Path          string
+	Format        Format
+	MergeStrategy MergeStrategy
+}
+
+var routes = []Route{
+	{"/select/logsql/query", NDJSON, Merge},
+	{"/select/logsql/hits", JSON, Merge},
+	{"/select/logsql/field_names", JSON, Sum},
+	{"/select/logsql/field_values", JSON, Sum},
+	{"/select/logsql/facets", JSON, Merge},
+	{"/select/logsql/stats_query", JSON, Merge},
+	{"/select/logsql/stats_query_range", JSON, Merge},
+	{"/select/logsql/stream_ids", JSON, Merge},
+	{"/select/logsql/streams", JSON, Merge},
+	{"/select/logsql/stream_field_names", JSON, Merge},
+	{"/select/logsql/stream_field_values", JSON, Merge},
+}
 
 func mergeAndSumJSON(a, b []byte) ([]byte, error) {
 	type Item struct {
@@ -102,6 +127,7 @@ func main() {
 		log.Fatal("-tenants not set")
 	}
 	var err error
+	var endpoints []Endpoint
 	endpoints, err = parseEndpointsFromFlags(idsFlag, nodesFlag)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
@@ -118,39 +144,44 @@ func main() {
 			log.Fatalf("Error: %v", err)
 		}
 	}
+
 	http.HandleFunc("/health", health)
-	http.HandleFunc("/select/logsql/query", makeJSONHandler("/select/logsql/query", "ndjson", Merge))
-	http.HandleFunc("/select/logsql/hits", makeJSONHandler("/select/logsql/hits", "json", Merge))
-	http.HandleFunc("/select/logsql/field_names", makeJSONHandler("/select/logsql/field_names", "json", Sum))
-	http.HandleFunc("/select/logsql/field_values", makeJSONHandler("/select/logsql/field_values", "json", Sum))
-	http.HandleFunc("/select/logsql/facets", makeJSONHandler("/select/logsql/facets", "json", Merge))
-	http.HandleFunc("/select/logsql/stats_query", makeJSONHandler("/select/logsql/stats_query", "json", Merge))
-	http.HandleFunc("/select/logsql/stats_query_range", makeJSONHandler("/select/logsql/stats_query_range", "json", Merge))
-	http.HandleFunc("/select/logsql/stream_ids", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
-	http.HandleFunc("/select/logsql/streams", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
-	http.HandleFunc("/select/logsql/stream_field_names", makeJSONHandler("/select/logsql/stream_field_names", "json", Merge))
-	http.HandleFunc("/select/logsql/stream_field_values", makeJSONHandler("/select/logsql/stream_ids", "json", Merge))
+	for _, r := range routes {
+		route := r // create a new variable scoped to this iteration
+		http.HandleFunc(route.Path, makeJSONHandler(route.Path, route.Format, route.MergeStrategy, endpoints))
+	}
 
 	log.Println("Listening on :8000")
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }
 
-func makeJSONHandler(path string, mode string, mergeStrategy MergeStrategy) http.HandlerFunc {
+func makeJSONHandler(path string, format Format, mergeStrategy MergeStrategy, endpoints []Endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logRequest(r)
-		merged, err := forwardAndMerge(r, path, mode, mergeStrategy)
+
+		if format == JSON {
+			w.Header().Set("Content-Type", "application/json")
+		} else {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+		}
+
+		data, err := getEndpointData(r, path, endpoints)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/x-ndjson")
+		merged, err := mergeData(data, format, mergeStrategy)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if _, err := w.Write(merged); err != nil {
 			log.Printf("failed to write response: %v", err)
 		}
 	}
 }
 
-func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy MergeStrategy) ([]byte, error) {
+func getEndpointData(r *http.Request, path string, endpoints []Endpoint) ([][]byte, error) {
 	// check if request contains a body
 	query := r.URL.RawQuery
 	body, err := io.ReadAll(r.Body)
@@ -170,9 +201,6 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 		errs    = make([]error, len(endpoints))
 		results = make([][]byte, len(endpoints))
 	)
-
-	logPrefix := ""
-	logPrefix = strings.TrimPrefix(path, "/select/logsql/")
 
 	for i, endpoint := range endpoints {
 		wg.Add(1)
@@ -201,7 +229,7 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 				return
 			}
 			defer func() {
-				if err := resp.Body.Close(); err != nil {
+				if err = resp.Body.Close(); err != nil {
 					log.Printf("warning: failed to close response body: %v", err)
 				}
 			}()
@@ -229,11 +257,14 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 			return nil, e
 		}
 	}
+	return results, nil
+}
 
-	switch mode {
-	case "json":
+func mergeData(data [][]byte, format Format, mergeStrategy MergeStrategy) ([]byte, error) {
+	switch format {
+	case JSON:
 		merged := []byte(`{}`)
-		for _, b := range results {
+		for _, b := range data {
 			var err error
 			switch mergeStrategy {
 			case Merge:
@@ -250,20 +281,19 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 		}
 		return merged, nil
 
-	case "ndjson":
+	case NDJSON:
 		var merged bytes.Buffer
-		for _, b := range results {
+		for _, b := range data {
 			scanner := bufio.NewScanner(bytes.NewReader(b))
 			for scanner.Scan() {
 				merged.Write(scanner.Bytes())
 				merged.WriteByte('\n')
 			}
 		}
-		log.Printf("[%s] Merged NDJSON size: %d bytes", logPrefix, merged.Len())
 		return merged.Bytes(), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported mode: %s", mode)
+		return nil, fmt.Errorf("unsupported format: %d", format)
 	}
 }
 

@@ -84,9 +84,6 @@ func parseEndpointsFromFlags(ids string, nodes string) ([]Endpoint, error) {
 			})
 		}
 	}
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no endpoints parsed")
-	}
 	return endpoints, nil
 }
 
@@ -143,7 +140,7 @@ func makeJSONHandler(path string, mode string, mergeStrategy MergeStrategy) http
 		logRequest(r)
 		merged, err := forwardAndMerge(r, path, mode, mergeStrategy)
 		if err != nil {
-			http.Error(w, "Error fetching NDJSON: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Error fetching NDJSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -216,8 +213,8 @@ func forwardAndMerge(r *http.Request, path string, mode string, mergeStrategy Me
 				return
 			}
 
-			if mode == "ndjson" && resp.StatusCode != http.StatusOK {
-				errs[i] = fmt.Errorf("[%s] status %d", logPrefix, resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				errs[i] = fmt.Errorf("%s", body)
 				return
 			}
 

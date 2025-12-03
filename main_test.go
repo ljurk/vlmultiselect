@@ -60,6 +60,7 @@ func TestParseEndpointsFromFlags(t *testing.T) {
 
 func TestForwardAndMerge_json(t *testing.T) {
 	tests := []struct {
+		comment string
 		path    string
 		output1 string
 		output2 string
@@ -67,29 +68,50 @@ func TestForwardAndMerge_json(t *testing.T) {
 		want    string
 		strat   MergeStrategy
 	}{
-		// one value, one to sum
-		{"/select/logsql/field_names",
+		{"one value, one to sum",
+			"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			false,
 			`{"values":[{"hits":46,"value":"A"}]}`,
 			Sum},
-		// two values, one to sum
-		{"/select/logsql/field_names",
+		{"two values, one to sum",
+			"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"}]}`,
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			false,
 			`{"values":[{"hits":46,"value":"A"},{"hits":161,"value":"B"}]}`,
 			Sum},
-		// two values, two to sum
-		{"/select/logsql/field_names",
+		{"two values, two to sum",
+			"/select/logsql/field_names",
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
 			false,
 			`{"values":[{"hits":46,"value":"A"},{"hits":322,"value":"B"}]}`,
 			Sum},
-		// other stucture
-		{"/foo/bar",
+		{"invalid output server1",
+			"/select/logsql/field_names",
+			`foo`,
+			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
+			true,
+			"",
+			Sum},
+		{"invalid output server2",
+			"/select/logsql/field_names",
+			`{"values":[{"hits":23,"value":"A"},{"hits":161,"value":"B"}]}`,
+			`foo`,
+			true,
+			"",
+			Sum},
+		{"invalid output both",
+			"/select/logsql/field_names",
+			"foo",
+			"foo",
+			true,
+			"",
+			Sum},
+		{"other stucture",
+			"/foo/bar",
 			`{"foo": 2}`,
 			`{"bar": 3}`,
 			false,
@@ -98,6 +120,7 @@ func TestForwardAndMerge_json(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		fmt.Printf("Testing [%s]\n", tt.comment)
 		server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, err := io.WriteString(w, tt.output1)
@@ -125,11 +148,15 @@ func TestForwardAndMerge_json(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 
 		data, err := getEndpointData(req, tt.path, endpoints)
+
 		if err != nil {
 			t.Fatalf("getEndpointData() failed: %s", err)
 			return
 		}
 		got, err := mergeData(data, JSON, tt.strat)
+		if (err != nil) == tt.wantErr {
+			continue
+		}
 		if err != nil {
 			t.Fatalf("mergeData() failed: %s", err)
 			return
